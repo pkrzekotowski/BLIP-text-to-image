@@ -2,14 +2,23 @@ import os
 import json
 import replicate
 import requests
+from replicate.exceptions import ModelError
 
-def run_model_on_image(image_path):
-    with open(image_path, "rb") as image_file:
-        output = replicate.run(
-            "salesforce/blip:2e1dddc8621f72155f24cf2e0adbde548458d3cab9f00c0139eea840d0ac4746",
-            input={"image": image_file}
-        )
-    return output
+
+def run_model_on_image(image_path, retries=3):
+    for _ in range(retries):
+        try:
+            with open(image_path, "rb") as image_file:
+                output = replicate.run(
+                    "salesforce/blip:2e1dddc8621f72155f24cf2e0adbde548458d3cab9f00c0139eea840d0ac4746",
+                    input={"image": image_file}
+                )
+            return output
+        except ModelError as e:
+            print(f"ModelError occurred for {image_path}. Retrying...")
+
+    print(f"Failed to process {image_path} after {retries} retries.")
+    return None
 
 
 def send_to_airtable(data):
