@@ -24,7 +24,28 @@ def run_model_on_image(image_path, retries=3):
     return None
 
 
-def send_to_airtable(caption):
+def translate_text_deepl(text, target='PL'):  # Set target language to Polish
+    deepl_api_url = 'https://api-free.deepl.com/v2/translate'
+    api_key = os.environ.get('DEEPL_API_KEY')  # Store your API key as an environment variable
+
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    data = {
+        "auth_key": api_key,
+        "text": text,
+        "target_lang": target,
+    }
+    response = requests.post(deepl_api_url, data=data, headers=headers)
+    response_json = response.json()
+
+    # The translations field contains an array with translations.
+    # For a single input text, it should contain a single translation.
+    translated_text = response_json['translations'][0]['text']
+    return translated_text.lower()  # Convert translated text to lowercase
+
+
+def send_to_airtable(caption, translated_caption):
     airtable_api_url = "https://api.airtable.com/v0/appqLmpIBtfifD9Ob/table" #Use your own airtable API URL
     api_key = os.environ.get('AIRTABLE_API_KEY')  # Store your API key as an environment variable
     headers = {
@@ -34,7 +55,8 @@ def send_to_airtable(caption):
     # Format your data as required by Airtable
     payload = {
         "fields": {
-            "Notes": caption
+            "ENG": caption,
+            "PL": translated_caption  # Replace "Translated Notes" with your actual column name
         }
     }
     response = requests.post(airtable_api_url, json=payload, headers=headers)
@@ -57,9 +79,11 @@ for image_path in image_paths:
     print("Processing image:", image_path)  # Print which image is currently being processed
     caption = run_model_on_image(image_path)
     if caption is not None:
-        outputs.append(caption)
-        print("Model output:", caption)  # Print the output from the model
+        translated_caption = translate_text_deepl(caption, target='PL')
+        outputs.append((caption, translated_caption))
+        print("Model output:", caption)
+        print("Translated output:", translated_caption)
         print("Sending data to Airtable")
-        send_to_airtable(caption)
+        send_to_airtable(caption, translated_caption)
     else:
         print(f"Could not extract a caption from output for {image_path}")
