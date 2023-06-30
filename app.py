@@ -13,7 +13,10 @@ def run_model_on_image(image_path, retries=3):
                     "salesforce/blip:2e1dddc8621f72155f24cf2e0adbde548458d3cab9f00c0139eea840d0ac4746",
                     input={"image": image_file}
                 )
-            return output
+                # Assuming the output is a string of the form "Caption: xyz", split on the colon and strip any leading/trailing whitespace
+                if output is not None:
+                    caption = output.split(":", 1)[1].strip()
+                    return caption
         except ModelError as e:
             print(f"ModelError occurred for {image_path}. Retrying...")
 
@@ -21,7 +24,7 @@ def run_model_on_image(image_path, retries=3):
     return None
 
 
-def send_to_airtable(data):
+def send_to_airtable(caption):
     airtable_api_url = "https://api.airtable.com/v0/appqLmpIBtfifD9Ob/table" #Use your own airtable API URL
     api_key = os.environ.get('AIRTABLE_API_KEY')  # Store your API key as an environment variable
     headers = {
@@ -31,7 +34,7 @@ def send_to_airtable(data):
     # Format your data as required by Airtable
     payload = {
         "fields": {
-            "Notes": json.dumps(data)
+            "Notes": caption
         }
     }
     response = requests.post(airtable_api_url, json=payload, headers=headers)
@@ -52,8 +55,11 @@ print("Image paths:", image_paths)  # Let's print out the image paths to make su
 outputs = []
 for image_path in image_paths:
     print("Processing image:", image_path)  # Print which image is currently being processed
-    output = run_model_on_image(image_path)
-    outputs.append(output)
-    print("Model output:", output)  # Print the output from the model
-    print("Sending data to Airtable")
-    send_to_airtable(output)
+    caption = run_model_on_image(image_path)
+    if caption is not None:
+        outputs.append(caption)
+        print("Model output:", caption)  # Print the output from the model
+        print("Sending data to Airtable")
+        send_to_airtable(caption)
+    else:
+        print(f"Could not extract a caption from output for {image_path}")
