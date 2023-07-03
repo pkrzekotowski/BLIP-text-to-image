@@ -2,25 +2,59 @@ import os
 import json
 import replicate
 import requests
+import dropbox
 from replicate.exceptions import ModelError
+from PIL import Image
 
 
-def run_model_on_image(image_path, retries=3):
+dbx = dropbox.Dropbox('sl.Bhdy0j4eMFoGubYvBcQxQgs_Uq_Ki2EVPORStz6CX9AZZQa22jww0I-TOB2craf6qumHgKuFwyUM8Ey8m1_TMk2P1wh7kltnvHIZPoa7lciWQ0k8xzSlSQdOwgQYMV5LsBhNH4Bt')
+
+
+def get_files_in_folder(folder_path):
+    try:
+        files = dbx.files_list_folder(folder_path).entries
+        return [file.path_lower for file in files if isinstance(file, dropbox.files.FileMetadata)]
+    except dropbox.exceptions.ApiError as err:
+        print('Dropbox API error:', err)
+        return []
+
+
+def get_direct_link(dbx, file_path):
+    try:
+        shared_link_metadata = dbx.sharing_create_shared_link_with_settings(file_path)
+        url = shared_link_metadata.url
+    except dropbox.exceptions.ApiError as err:
+        if err.error.is_shared_link_already_exists():
+            shared_links = dbx.sharing_list_shared_links(file_path).links
+            if shared_links:
+                url = shared_links[0].url  # Get the URL of the first shared link
+            else:
+                print(f"Error: no shared links found for {file_path}")
+                return None
+        else:
+            print('Dropbox API error:', err)
+            return None
+    # Replace www.dropbox.com with dl.dropboxusercontent.com
+    direct_link = url.replace("www.dropbox.com", "dl.dropboxusercontent.com").replace("?dl=0", "?dl=1")
+    return direct_link
+
+
+
+def run_model_on_image(image_url, retries=3):
     for _ in range(retries):
         try:
-            with open(image_path, "rb") as image_file:
-                output = replicate.run(
-                    "salesforce/blip:2e1dddc8621f72155f24cf2e0adbde548458d3cab9f00c0139eea840d0ac4746",
-                    input={"image": image_file}
-                )
-                # Assuming the output is a string of the form "Caption: xyz", split on the colon and strip any leading/trailing whitespace
-                if output is not None:
-                    caption = output.split(":", 1)[1].strip()
-                    return caption
+            output = replicate.run(
+                "salesforce/blip:2e1dddc8621f72155f24cf2e0adbde548458d3cab9f00c0139eea840d0ac4746",
+                input={"image": image_url}
+            )
+            # Assuming the output is a string of the form "Caption: xyz", split on the colon and strip any leading/trailing whitespace
+            if output is not None:
+                caption = output.split(":", 1)[1].strip()
+                return caption
         except ModelError as e:
-            print(f"ModelError occurred for {image_path}. Retrying...")
+            print(f"ModelError occurred for {image_url}. Retrying...")
 
-    print(f"Failed to process {image_path} after {retries} retries.")
+    print(f"Failed to process {image_url} after {retries} retries.")
     return None
 
 
@@ -45,7 +79,7 @@ def translate_text_deepl(text, target='PL'):  # Set target language to Polish
     return translated_text.lower()  # Convert translated text to lowercase
 
 
-def send_to_airtable(caption, translated_caption):
+def send_to_airtable(caption, translated_caption, image_path):
     airtable_api_url = "https://api.airtable.com/v0/appqLmpIBtfifD9Ob/table" #Use your own airtable API URL
     api_key = os.environ.get('AIRTABLE_API_KEY')  # Store your API key as an environment variable
     headers = {
@@ -56,7 +90,12 @@ def send_to_airtable(caption, translated_caption):
     payload = {
         "fields": {
             "ENG": caption,
-            "PL": translated_caption  # Replace "Translated Notes" with your actual column name
+            "PL": translated_caption,  # Replace "Translated Notes" with your actual column name
+            "Attachments": [
+                {
+                    "url": image_url
+                }
+            ]
         }
     }
     response = requests.post(airtable_api_url, json=payload, headers=headers)
@@ -66,24 +105,22 @@ def send_to_airtable(caption, translated_caption):
     print("Response Content:", response.content)
 
 
-# Directory where your images are stored (relative to the script)
-image_directory = os.path.join(os.path.dirname(__file__), "Images") # Remember to set your own path
-
-# Get a list of all image paths in the directory
-image_paths = [os.path.join(image_directory, image) for image in os.listdir(image_directory) if image.endswith(('.png', '.jpg', '.jpeg'))]
-
-print("Image paths:", image_paths)  # Let's print out the image paths to make sure they are being read
+folder_path = '/Images'  # The path to your Dropbox folder
+file_paths = get_files_in_folder(folder_path)
 
 outputs = []
-for image_path in image_paths:
-    print("Processing image:", image_path)  # Print which image is currently being processed
-    caption = run_model_on_image(image_path)
-    if caption is not None:
-        translated_caption = translate_text_deepl(caption, target='PL')
-        outputs.append((caption, translated_caption))
-        print("Model output:", caption)
-        print("Translated output:", translated_caption)
-        print("Sending data to Airtable")
-        send_to_airtable(caption, translated_caption)
-    else:
-        print(f"Could not extract a caption from output for {image_path}")
+for file_path in file_paths:
+    print("Processing file:", file_path)  # Print which image is currently being processed
+    image_url = get_direct_link(dbx, file_path)
+    if image_url is not None:
+        print("Running model on image")
+        caption = run_model_on_image(image_url)
+        if caption is not None:
+            translated_caption = translate_text_deepl(caption, target='PL')
+            outputs.append((caption, translated_caption))
+            print("Model output:", caption)
+            print("Translated output:", translated_caption)
+            print("Sending data to Airtable")
+            send_to_airtable(caption, translated_caption, image_url)
+        else:
+            print(f"Could not extract a caption from output for {file_path}")
